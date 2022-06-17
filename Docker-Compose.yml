@@ -1,0 +1,127 @@
+version: "3"
+services:
+
+  redis:
+    image: redis:alpine
+    networks:
+      - frontend
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+  db:
+    image: postgres:9.4
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+  vote:
+    image: dockersamples/examplevotingapp_vote:before
+    #ports:
+     # - 5000:80
+    networks:
+      - frontend
+      - webproxy
+    depends_on:
+      - redis
+    deploy:
+      replicas: 2
+      resources:
+         reservations:
+          cpus: '0.5'
+          memory: 64M
+         limits:
+          cpus: '3'
+          memory: 1G
+      update_config:
+        parallelism: 2
+      restart_policy:
+        condition: on-failure
+      labels:
+        traefik.docker.network: webproxy
+        traefik.enable: 'true'
+        traefik.http.routers.peerapatvoting-https.entrypoints: websecure
+        traefik.http.routers.peerapatvoting-https.rule: Host(`peerapatvote.xops.ipv9.xyz`)
+        traefik.http.routers.peerapatvoting-https.tls.certresolver: default
+        traefik.http.services.peerapatvoting.loadbalancer.server.port: '80'
+
+  result:
+    image: dockersamples/examplevotingapp_result:before
+    #ports:
+      #- 5001:80
+    networks:
+      - webproxy
+      - backend
+    depends_on:
+      - db
+    deploy:
+      replicas: 1
+      resources:
+         reservations:
+          cpus: '0.5'
+          memory: 64M
+         limits:
+          cpus: '2'
+          memory: 1G
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      labels:
+        traefik.docker.network: webproxy
+        traefik.enable: 'true'
+        traefik.http.routers.peerapatvoters-https.entrypoints: websecure
+        traefik.http.routers.peerapatvoters-https.rule: Host(`peerapatvoteresult.xops.ipv9.xyz`)
+        traefik.http.routers.peerapatvoters-https.tls.certresolver: default
+        traefik.http.services.peerapatvoters.loadbalancer.server.port: '80'
+
+  worker:
+    image: dockersamples/examplevotingapp_worker
+    networks:
+      - frontend
+      - backend
+      #- webproxy
+    depends_on:
+      - db
+      - redis
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels: [APP=VOTING]
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+      placement:
+        constraints: [node.role == manager]
+
+  visualizer:
+    image: dockersamples/visualizer:stable
+    ports:
+      - "8081:8080"
+    stop_grace_period: 1m30s
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+
+networks:
+  frontend:
+  backend:
+  webproxy:
+    external: true
+
+volumes:
+  db-data:
